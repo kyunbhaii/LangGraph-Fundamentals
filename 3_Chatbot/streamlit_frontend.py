@@ -5,29 +5,54 @@ st.set_page_config(layout="wide")
 
 st.markdown("""
 <style>
-    /* Main content width */
-    .block-container {
-        max-width: 900px !important;
-        margin: auto !important;
-        padding-left: 1.5rem !important;
-        padding-right: 1.5rem !important;
-    }
 
-    /* Chat messages */
-    [data-testid="stChatMessage"] {
-        max-width: 100% !important;
-    }
+/* ---------------- SIDEBAR LOCKED ---------------- */
 
-    /* Chat input container fix */
-    [data-testid="stChatInput"] {
-        max-width: 900px !important;
-        margin: auto !important;
-    }
+/* Fixed width */
+[data-testid="stSidebar"] {
+    min-width: 320px !important;
+    max-width: 320px !important;
+    width: 320px !important;
+}
 
-    /* Input box inside */
-    [data-testid="stChatInput"] > div {
-        width: 100% !important;
-    }
+/* Prevent collapse animation */
+section[data-testid="stSidebar"] {
+    transform: none !important;
+}
+
+/* ---------------- REMOVE ALL TOGGLE BUTTONS ---------------- */
+
+/* Old toggle button */
+button[kind="sidebarToggle"] {
+    display: none !important;
+}
+
+/* New toggle button (top arrow icon) */
+[data-testid="stSidebarCollapseButton"] {
+    display: none !important;
+}
+
+/* Collapsed expand button */
+[data-testid="stSidebarCollapsedControl"] {
+    display: none !important;
+}
+
+/* Sometimes appears as generic button in header */
+header button {
+    display: none !important;
+}
+
+/* Extra safety: prevent hidden state */
+[data-testid="stSidebar"][aria-expanded="false"] {
+    transform: none !important;
+    visibility: visible !important;
+}
+
+/* Keep sidebar content stable */
+[data-testid="stSidebarContent"] {
+    min-width: 320px !important;
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -144,14 +169,14 @@ for thread_id in st.session_state['chat_threads'][:: -1]:
                 
         if st.session_state.get('active_menu') == thread_id:
             with st.sidebar.container(border=True):
-                if st.button("Rename ✏️", key=f"rename_{thread_id}", use_container_width=True):
+                if st.button("Rename", key=f"rename_{thread_id}", use_container_width=True):
                     if st.session_state.get('editing_thread') == thread_id:
                         st.session_state['editing_thread'] = None
                     else:
                         st.session_state['editing_thread'] = thread_id
                     st.rerun()
                     
-                if st.button("Delete 🗑️", key=f"delete_{thread_id}", use_container_width=True):
+                if st.button("Delete", key=f"delete_{thread_id}", use_container_width=True):
                     delete_thread_from_db(thread_id)
                     if thread_id in st.session_state['chat_threads']:
                         st.session_state['chat_threads'].remove(thread_id)
