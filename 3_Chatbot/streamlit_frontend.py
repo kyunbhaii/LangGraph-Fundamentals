@@ -1,4 +1,4 @@
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 import streamlit as st
 
 st.set_page_config(layout="wide")
@@ -56,7 +56,8 @@ header button {
 </style>
 """, unsafe_allow_html=True)
 
-from langgraph_backend import chatbot, retrieve_all_threads, delete_thread_from_db
+from langgraph_backend import chatbot, retrieve_all_threads, delete_thread_from_db, langfuse_handler
+from langfuse import observe, propagate_attributes
 import uuid
 import json
 import os
@@ -85,7 +86,8 @@ def reset_chat():
 
 def add_thread(thread_id):
     if thread_id not in st.session_state['chat_threads']:
-        st.session_state['chat_threads'].append(thread_id)
+        # Insert at the beginning (index 0) so new chats are at the top
+        st.session_state['chat_threads'].insert(0, thread_id)
         if 'thread_titles' not in st.session_state:
             st.session_state['thread_titles'] = {}
         if thread_id not in st.session_state['thread_titles']:
@@ -93,7 +95,7 @@ def add_thread(thread_id):
 
 def load_conversation(thread_id):
     state = chatbot.get_state(config = {'configurable': {'thread_id': thread_id}})
-    return state.values.get('chat', []) if state.values else []
+    return state.values.get('messages', []) if state.values else []
 
 # st. session_state -> dict -›
 if "chat_history" not in st.session_state:
@@ -123,7 +125,23 @@ if 'editing_thread' not in st.session_state:
 
 add_thread(st.session_state['thread_id'])
 
-CONFIG = {'configurable': {'thread_id': st.session_state['thread_id']}}
+def get_config():
+    return {
+        'configurable': {'thread_id': st.session_state['thread_id']},
+        'run_name': 'Chatbot_Interaction',
+        'tags': ['Project: LangGraph Chatbot', 'Streamlit', st.session_state['thread_id']],
+        'metadata': {
+            'project': 'Chatbot',
+            'session_id': st.session_state['thread_id'],
+            'model': 'llama-3.1-8b-instant', 
+            'model_temp': '0.3', 
+            'thread_id': st.session_state['thread_id']
+        },
+        'recursion_limit': 5,
+        'callbacks': [langfuse_handler]
+    }
+
+
 
 user_input = st.chat_input('Type here...')
 
@@ -141,7 +159,7 @@ if st.sidebar.button('New Chat'):
 
 st.sidebar.header('My Conversations')
 
-for thread_id in st.session_state['chat_threads'][:: -1]:
+for thread_id in st.session_state['chat_threads']:
     title = st.session_state['thread_titles'].get(thread_id, "New Chat")
     
     # Only display threads that have an actual recorded name (not empty "New Chat"s)
@@ -153,6 +171,12 @@ for thread_id in st.session_state['chat_threads'][:: -1]:
                 chats = load_conversation(thread_id)
                 temp_chats = []
                 for chat_msg in chats:
+                    # Skip ToolMessages and AIMessages that are just tool calls (no text content)
+                    if isinstance(chat_msg, ToolMessage):
+                        continue
+                    if isinstance(chat_msg, AIMessage) and chat_msg.tool_calls and not chat_msg.content:
+                        continue
+                        
                     role = 'user' if isinstance(chat_msg, HumanMessage) else 'assistant'
                     temp_chats.append({'role': role, 'content': chat_msg.content})
                 st.session_state['chat_history'] = temp_chats
@@ -206,6 +230,47 @@ elif len(st.session_state.chat_history) > 0:
         with st.chat_message(chat['role']):
             st.markdown(chat['content'])
 
+@observe(name="Chatbot")
+def generate_response(user_input):
+    with propagate_attributes(
+        session_id=st.session_state['thread_id'],
+        tags=["Project: LangGraph Chatbot", st.session_state['thread_id']],
+        metadata={"project": "LangGraph Chatbot", "thread_id": st.session_state['thread_id']}
+    ):
+
+        # add assistant message to history
+        with st.chat_message('assistant'):
+            
+            def stream_generator():
+                status_container = None
+                
+                for message_chunk, metadata in chatbot.stream(
+                    {'messages': [HumanMessage(content=user_input)]},
+                    config = get_config(),
+                    stream_mode = 'messages'
+                ):
+                    # 1. Detected a tool call intent
+                    if isinstance(message_chunk, AIMessage) and message_chunk.tool_calls:
+                        status_container = st.status("Thinking...", expanded=False)
+                        for tool_call in message_chunk.tool_calls:
+                            status_container.write(f"Using tool: `{tool_call['name']}`")
+                            status_container.update(label=f"Running `{tool_call['name']}`...")
+                    
+                    # 2. Detected a tool response
+                    if isinstance(message_chunk, ToolMessage):
+                        if status_container:
+                            status_container.write(f"Tool `{message_chunk.name}` finished.")
+                            status_container.update(label="✅ Tool finished", state="complete", expanded=False)
+
+                    # 3. Stream the actual text response
+                    if isinstance(message_chunk, AIMessage) and message_chunk.content:
+                        yield message_chunk.content
+
+            ai_message = st.write_stream(stream_generator())
+
+        st.session_state.chat_history.append({'role': 'assistant', 'content': ai_message})
+        return ai_message
+
 if user_input:
     # add user message to history
     st.session_state.chat_history.append({'role': 'user', 'content': user_input})
@@ -213,13 +278,5 @@ if user_input:
     with st.chat_message('user'):
         st.markdown(user_input)
     
-    # add assistant message to history
-    with st.chat_message('assistant'):
-        ai_message = st.write_stream(
-            message_chunk.content for message_chunk, metadata in chatbot.stream(
-                {'chat': [HumanMessage(content=user_input)]},
-                config = CONFIG,
-                stream_mode = 'messages'
-            ) if message_chunk.content
-        )
-    st.session_state.chat_history.append({'role': 'assistant', 'content': ai_message})
+    # Process and stream the response
+    generate_response(user_input)
