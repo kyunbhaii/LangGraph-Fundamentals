@@ -9,3 +9,4 @@ __pycache__
 *-wal
 .indices
 chat_titles.json
+.DS_Store
