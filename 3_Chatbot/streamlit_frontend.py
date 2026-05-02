@@ -1,5 +1,7 @@
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 import streamlit as st
+import asyncio
+import aiosqlite
 
 st.set_page_config(layout="wide")
 
@@ -56,8 +58,9 @@ header button {
 </style>
 """, unsafe_allow_html=True)
 
-from langgraph_backend import chatbot, retrieve_all_threads, delete_thread_from_db, langfuse_handler
+from langgraph_backend import build_graph, retrieve_all_threads, delete_thread_from_db, langfuse_handler
 from langfuse import observe, propagate_attributes
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 import uuid
 import json
 import os
@@ -93,9 +96,14 @@ def add_thread(thread_id):
         if thread_id not in st.session_state['thread_titles']:
              st.session_state['thread_titles'][thread_id] = "New Chat"
 
+async def load_conversation_async(thread_id):
+    async with aiosqlite.connect("chatbot.db") as conn:
+        chatbot = await build_graph(conn)
+        state = await chatbot.aget_state(config = {'configurable': {'thread_id': thread_id}})
+        return state.values.get('messages', []) if state.values else []
+
 def load_conversation(thread_id):
-    state = chatbot.get_state(config = {'configurable': {'thread_id': thread_id}})
-    return state.values.get('messages', []) if state.values else []
+    return asyncio.run(load_conversation_async(thread_id))
 
 # st. session_state -> dict -›
 if "chat_history" not in st.session_state:
@@ -105,7 +113,11 @@ if 'thread_id' not in st.session_state:
     st.session_state['thread_id'] = generate_thread_id()
 
 if 'chat_threads' not in st.session_state:
-    st.session_state['chat_threads'] = retrieve_all_threads()
+    async def get_initial_threads():
+        async with aiosqlite.connect("chatbot.db") as conn:
+            checkpointer = AsyncSqliteSaver(conn=conn)
+            return await retrieve_all_threads(checkpointer)
+    st.session_state['chat_threads'] = asyncio.run(get_initial_threads())
 
 if 'thread_titles' not in st.session_state:
     st.session_state['thread_titles'] = load_titles()
@@ -201,7 +213,7 @@ for thread_id in st.session_state['chat_threads']:
                     st.rerun()
                     
                 if st.button("Delete", key=f"delete_{thread_id}", use_container_width=True):
-                    delete_thread_from_db(thread_id)
+                    asyncio.run(delete_thread_from_db(thread_id))
                     if thread_id in st.session_state['chat_threads']:
                         st.session_state['chat_threads'].remove(thread_id)
                     if thread_id in st.session_state['thread_titles']:
@@ -241,30 +253,32 @@ def generate_response(user_input):
         # add assistant message to history
         with st.chat_message('assistant'):
             
-            def stream_generator():
-                status_container = None
-                
-                for message_chunk, metadata in chatbot.stream(
-                    {'messages': [HumanMessage(content=user_input)]},
-                    config = get_config(),
-                    stream_mode = 'messages'
-                ):
-                    # 1. Detected a tool call intent
-                    if isinstance(message_chunk, AIMessage) and message_chunk.tool_calls:
-                        status_container = st.status("Thinking...", expanded=False)
-                        for tool_call in message_chunk.tool_calls:
-                            status_container.write(f"Using tool: `{tool_call['name']}`")
-                            status_container.update(label=f"Running `{tool_call['name']}`...")
+            async def stream_generator():
+                async with aiosqlite.connect("chatbot.db") as conn:
+                    chatbot = await build_graph(conn)
+                    status_container = None
                     
-                    # 2. Detected a tool response
-                    if isinstance(message_chunk, ToolMessage):
-                        if status_container:
-                            status_container.write(f"Tool `{message_chunk.name}` finished.")
-                            status_container.update(label="✅ Tool finished", state="complete", expanded=False)
+                    async for message_chunk, metadata in chatbot.astream(
+                        {'messages': [HumanMessage(content=user_input)]},
+                        config = get_config(),
+                        stream_mode = 'messages'
+                    ):
+                        # 1. Detected a tool call intent
+                        if isinstance(message_chunk, AIMessage) and message_chunk.tool_calls:
+                            status_container = st.status("Thinking...", expanded=False)
+                            for tool_call in message_chunk.tool_calls:
+                                status_container.write(f"Using tool: `{tool_call['name']}`")
+                                status_container.update(label=f"Running `{tool_call['name']}`...")
+                        
+                        # 2. Detected a tool response
+                        if isinstance(message_chunk, ToolMessage):
+                            if status_container:
+                                status_container.write(f"Tool `{message_chunk.name}` finished.")
+                                status_container.update(label="✅ Tool finished", state="complete", expanded=False)
 
-                    # 3. Stream the actual text response
-                    if isinstance(message_chunk, AIMessage) and message_chunk.content:
-                        yield message_chunk.content
+                        # 3. Stream the actual text response
+                        if isinstance(message_chunk, AIMessage) and message_chunk.content:
+                            yield message_chunk.content
 
             ai_message = st.write_stream(stream_generator())
 
