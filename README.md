@@ -22,6 +22,7 @@ A hands-on guide to LangGraph covering state graphs, persistence, chatbot memory
 | 8 | [Memory](#8-memory) | Advanced memory management in agents |
 | 9 | [CRAG](#9-crag-corrective-rag) | Corrective RAG, relevance grading, fallback web search |
 | 10 | [Self-RAG](#10-self-rag) | Agentic RAG, self-correction loops, hallucination grading |
+| 11 | [Agentic Blog Writer](#11-agentic-blog-writer) | End-to-end multi-agent pipeline for research, planning, writing, and diagram generation |
 
 ---
 
@@ -40,7 +41,10 @@ langgraph-fundamentals/
 ├── 8_Memory/
 ├── 9_CRAG/
 ├── 10_Self_RAG/
-└── Dataset/
+├── 11_Project/
+├── Dataset/
+├── logs/
+└── tests/
 ```
 
 ---
@@ -124,6 +128,11 @@ langgraph-fundamentals/
 - Complex agentic RAG with self-correction loops.
 - Grading answer relevance, grounding (IsSUP), and usefulness (IsUSE).
 - Strict JSON schema parsing with Groq API for deterministic agent routing.
+
+### 11. Agentic Blog Writer
+- Comprehensive final project integrating semantic routing, web research (Tavily), structured planning, and fan-out/fan-in parallel section writing.
+- Interactive Streamlit frontend to preview, download, and bundle generated Markdown files with their corresponding assets.
+- Fully free image/diagram generation integration via Pollinations.ai, complete with user toggle controls.
 
 ---
 
